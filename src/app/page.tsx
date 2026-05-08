@@ -2,32 +2,65 @@
 
 import { useState, useEffect, useRef } from "react";
 
+const PROJECT_COLORS = [
+  { bg: "bg-blue-100", text: "text-blue-700", border: "border-blue-300", dot: "bg-blue-500" },
+  { bg: "bg-violet-100", text: "text-violet-700", border: "border-violet-300", dot: "bg-violet-500" },
+  { bg: "bg-emerald-100", text: "text-emerald-700", border: "border-emerald-300", dot: "bg-emerald-500" },
+  { bg: "bg-orange-100", text: "text-orange-700", border: "border-orange-300", dot: "bg-orange-500" },
+  { bg: "bg-rose-100", text: "text-rose-700", border: "border-rose-300", dot: "bg-rose-500" },
+  { bg: "bg-teal-100", text: "text-teal-700", border: "border-teal-300", dot: "bg-teal-500" },
+] as const;
+
+interface Project {
+  id: string;
+  name: string;
+  colorIndex: number;
+}
+
 interface Task {
   id: string;
   text: string;
   done: boolean;
+  projectId: string | null;
 }
 
 type BusyAction = { type: "toggle" | "delete"; id: string } | { type: "add" } | null;
 
 export default function Home() {
+  const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState<BusyAction>(null);
   const [ready, setReady] = useState(false);
+  const [addingProject, setAddingProject] = useState(false);
+  const [projectInput, setProjectInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem("tasks-v1");
-      if (stored) setTasks(JSON.parse(stored));
+      const storedProjects = localStorage.getItem("projects-v1");
+      if (storedProjects) setProjects(JSON.parse(storedProjects));
+
+      const storedTasks = localStorage.getItem("tasks-v2");
+      if (storedTasks) {
+        setTasks(JSON.parse(storedTasks));
+      } else {
+        const v1 = localStorage.getItem("tasks-v1");
+        if (v1) {
+          const old = JSON.parse(v1) as Array<{ id: string; text: string; done: boolean }>;
+          setTasks(old.map((t) => ({ ...t, projectId: null })));
+        }
+      }
     } catch {}
     setReady(true);
   }, []);
 
   useEffect(() => {
-    if (ready) localStorage.setItem("tasks-v1", JSON.stringify(tasks));
-  }, [tasks, ready]);
+    if (!ready) return;
+    localStorage.setItem("projects-v1", JSON.stringify(projects));
+    localStorage.setItem("tasks-v2", JSON.stringify(tasks));
+  }, [tasks, projects, ready]);
 
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -37,7 +70,7 @@ export default function Home() {
     setBusy({ type: "add" });
     await wait(350);
     setTasks((prev) => [
-      { id: Date.now().toString(), text, done: false },
+      { id: Date.now().toString(), text, done: false, projectId: selectedProjectId },
       ...prev,
     ]);
     setInput("");
@@ -49,9 +82,7 @@ export default function Home() {
     if (busy) return;
     setBusy({ type: "toggle", id });
     await wait(250);
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
-    );
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: !t.done } : t)));
     setBusy(null);
   };
 
@@ -61,6 +92,26 @@ export default function Home() {
     await wait(350);
     setTasks((prev) => prev.filter((t) => t.id !== id));
     setBusy(null);
+  };
+
+  const addProject = () => {
+    const name = projectInput.trim();
+    if (!name) return;
+    const newProject: Project = {
+      id: Date.now().toString(),
+      name,
+      colorIndex: projects.length % PROJECT_COLORS.length,
+    };
+    setProjects((prev) => [...prev, newProject]);
+    setProjectInput("");
+    setAddingProject(false);
+    setSelectedProjectId(newProject.id);
+  };
+
+  const deleteProject = (id: string) => {
+    setProjects((prev) => prev.filter((p) => p.id !== id));
+    setTasks((prev) => prev.map((t) => (t.projectId === id ? { ...t, projectId: null } : t)));
+    if (selectedProjectId === id) setSelectedProjectId(null);
   };
 
   const isBusy = (action: BusyAction) => {
@@ -77,7 +128,18 @@ export default function Home() {
     return false;
   };
 
-  const doneCount = tasks.filter((t) => t.done).length;
+  const selectedProject =
+    selectedProjectId !== null
+      ? (projects.find((p) => p.id === selectedProjectId) ?? null)
+      : null;
+  const filteredTasks =
+    selectedProjectId === null ? tasks : tasks.filter((t) => t.projectId === selectedProjectId);
+  const doneCount = filteredTasks.filter((t) => t.done).length;
+  const progressPercent =
+    filteredTasks.length > 0 ? Math.round((doneCount / filteredTasks.length) * 100) : 0;
+  const selectedColor = selectedProject
+    ? PROJECT_COLORS[selectedProject.colorIndex % PROJECT_COLORS.length]
+    : null;
 
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col items-center px-4 py-10">
@@ -85,9 +147,113 @@ export default function Home() {
         <h1 className="text-2xl font-bold text-center text-slate-800 mb-1">
           やることリスト
         </h1>
-        <p className="text-center text-slate-500 text-base mb-8">
+        <p className="text-center text-slate-500 text-base mb-6">
           ブラウザを閉じてもデータは保存されます
         </p>
+
+        {/* プロジェクトタブ */}
+        <div className="mb-6">
+          <div className="flex flex-wrap gap-2 items-center">
+            <button
+              onClick={() => setSelectedProjectId(null)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                selectedProjectId === null
+                  ? "bg-slate-700 text-white border-slate-700"
+                  : "bg-white border-slate-200 text-slate-600 hover:border-slate-400"
+              }`}
+            >
+              すべて
+            </button>
+
+            {projects.map((project) => {
+              const color = PROJECT_COLORS[project.colorIndex % PROJECT_COLORS.length];
+              const ptasks = tasks.filter((t) => t.projectId === project.id);
+              const pdone = ptasks.filter((t) => t.done).length;
+              const isSelected = selectedProjectId === project.id;
+              return (
+                <button
+                  key={project.id}
+                  onClick={() => setSelectedProjectId(project.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                    isSelected
+                      ? `${color.bg} ${color.text} ${color.border}`
+                      : "bg-white border-slate-200 text-slate-600 hover:border-slate-400"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color.dot}`} />
+                  {project.name}
+                  {ptasks.length > 0 && (
+                    <span className="text-xs opacity-60 ml-0.5">
+                      {pdone}/{ptasks.length}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {addingProject ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  value={projectInput}
+                  onChange={(e) => setProjectInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addProject();
+                    if (e.key === "Escape") {
+                      setAddingProject(false);
+                      setProjectInput("");
+                    }
+                  }}
+                  placeholder="プロジェクト名"
+                  autoFocus
+                  className="border border-slate-300 rounded-lg px-2.5 py-1 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={addProject}
+                  disabled={!projectInput.trim()}
+                  className="px-2.5 py-1 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                >
+                  OK
+                </button>
+                <button
+                  onClick={() => {
+                    setAddingProject(false);
+                    setProjectInput("");
+                  }}
+                  className="px-2 py-1 border border-slate-200 text-slate-400 rounded-lg text-sm hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setAddingProject(true)}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-full text-sm text-slate-400 border border-dashed border-slate-300 hover:border-slate-400 hover:text-slate-600 transition-colors"
+              >
+                <SmallPlusIcon />
+                プロジェクト
+              </button>
+            )}
+          </div>
+
+          {/* 選択中プロジェクトの進捗バー */}
+          {selectedProject && filteredTasks.length > 0 && (
+            <div className="mt-3 px-1">
+              <div className="flex justify-between text-xs text-slate-500 mb-1.5">
+                <span className="font-medium">{selectedProject.name}</span>
+                <span>
+                  {doneCount} / {filteredTasks.length} 件完了 ({progressPercent}%)
+                </span>
+              </div>
+              <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${selectedColor!.dot}`}
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* 追加フォーム */}
         <div className="flex gap-2 mb-6">
@@ -97,7 +263,11 @@ export default function Home() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addTask()}
-            placeholder="やることを入力..."
+            placeholder={
+              selectedProject
+                ? `${selectedProject.name} にやることを追加…`
+                : "やることを入力…"
+            }
             disabled={!!busy}
             className="flex-1 border border-slate-300 rounded-xl px-4 text-lg min-h-[44px] bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
           />
@@ -122,22 +292,28 @@ export default function Home() {
         </div>
 
         {/* カウント */}
-        {tasks.length > 0 && (
+        {filteredTasks.length > 0 && (
           <p className="text-base text-slate-500 mb-3 text-right">
-            {doneCount} / {tasks.length} 件 完了
+            {doneCount} / {filteredTasks.length} 件 完了
           </p>
         )}
 
         {/* リスト */}
-        {!ready ? null : tasks.length === 0 ? (
+        {!ready ? null : filteredTasks.length === 0 ? (
           <div className="text-center text-slate-400 text-lg py-16">
             やることはまだありません
           </div>
         ) : (
           <ul className="space-y-2">
-            {tasks.map((task) => {
+            {filteredTasks.map((task) => {
               const isToggling = isBusy({ type: "toggle", id: task.id });
               const isDeleting = isBusy({ type: "delete", id: task.id });
+              const taskProject = task.projectId
+                ? projects.find((p) => p.id === task.projectId)
+                : null;
+              const taskColor = taskProject
+                ? PROJECT_COLORS[taskProject.colorIndex % PROJECT_COLORS.length]
+                : null;
               return (
                 <li
                   key={task.id}
@@ -165,14 +341,26 @@ export default function Home() {
                     )}
                   </button>
 
-                  {/* テキスト */}
-                  <span
-                    className={`flex-1 text-lg leading-snug break-all ${
-                      task.done ? "line-through text-slate-400" : "text-slate-800"
-                    }`}
-                  >
-                    {task.text}
-                  </span>
+                  {/* テキスト + プロジェクトバッジ */}
+                  <div className="flex-1 min-w-0">
+                    <span
+                      className={`text-lg leading-snug break-all ${
+                        task.done ? "line-through text-slate-400" : "text-slate-800"
+                      }`}
+                    >
+                      {task.text}
+                    </span>
+                    {selectedProjectId === null && taskProject && taskColor && (
+                      <div className="mt-0.5">
+                        <span
+                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${taskColor.bg} ${taskColor.text}`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${taskColor.dot}`} />
+                          {taskProject.name}
+                        </span>
+                      </div>
+                    )}
+                  </div>
 
                   {/* 削除ボタン */}
                   <button
@@ -194,6 +382,18 @@ export default function Home() {
               );
             })}
           </ul>
+        )}
+
+        {/* 選択中プロジェクトの削除 */}
+        {selectedProject && (
+          <div className="mt-6 text-center">
+            <button
+              onClick={() => deleteProject(selectedProject.id)}
+              className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+            >
+              「{selectedProject.name}」を削除する
+            </button>
+          </div>
         )}
       </div>
     </main>
@@ -230,6 +430,22 @@ function PlusIcon() {
   return (
     <svg
       className="w-5 h-5"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+    </svg>
+  );
+}
+
+function SmallPlusIcon() {
+  return (
+    <svg
+      className="w-3.5 h-3.5"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
